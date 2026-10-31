@@ -1,109 +1,104 @@
-import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
-import { CONTACT_EMAIL, concepts, copy, projects, tradeLook, type Locale, type Market, type Trade } from './data/content'
-import { PhoneMock } from './components/PhoneMock'
-import { Segmented } from './components/Segmented'
+import { useEffect, useRef, useState, type MouseEvent } from 'react'
+import { CONTACT_EMAIL, concepts, copy, projects, type Locale, type Market } from './data/content'
+import { Arrow, MarketTabs, mailto, trackPointer } from './components/ui'
 import './styles.css'
 
-type Shot = { src: string; title: string; url?: string }
-
-const reducedMotion = () => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches
-
-function initialTheme(): 'light' | 'dark' {
-  try {
-    const saved = localStorage.getItem('ld-theme')
-    if (saved === 'light' || saved === 'dark') return saved
-  } catch {
-    /* storage blocked: fall back to the system setting */
-  }
-  return typeof matchMedia === 'function' && matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
-}
-
-const money = (n: number) => `$${n.toLocaleString('en-US')}`
+type Preview = { src: string; title: string; url?: string }
 
 export default function App() {
   const locale: Locale = window.location.pathname.startsWith('/es') ? 'es' : 'en'
   const es = locale === 'es'
   const t = copy[locale]
 
-  const [theme, setTheme] = useState(initialTheme)
+  const [dark, setDark] = useState(() => {
+    try {
+      return localStorage.getItem('gp-theme') === 'dark'
+    } catch {
+      return false
+    }
+  })
   const [menu, setMenu] = useState(false)
+  const [preview, setPreview] = useState<Preview | null>(null)
+  // Spanish visitors are most likely from Panama, English visitors from the US.
   const [market, setMarket] = useState<Market>(es ? 'PA' : 'US')
-  const [trade, setTrade] = useState<Trade>('cleaning')
-  const [name, setName] = useState('')
-  const [shot, setShot] = useState<Shot | null>(null)
   const trigger = useRef<HTMLElement | null>(null)
   const dialog = useRef<HTMLDialogElement>(null)
 
-  // The one animated moment: the example business name types itself into the phone on load.
-  const defaultName = t.mock[trade].defaultName
-  const [typed, setTyped] = useState(() => (reducedMotion() ? defaultName.length : 0))
-  useEffect(() => {
-    if (reducedMotion()) return
-    let i = 0
-    let timer: number | undefined
-    const start = window.setTimeout(() => {
-      timer = window.setInterval(() => {
-        i += 1
-        setTyped(i)
-        if (i >= defaultName.length) window.clearInterval(timer)
-      }, 55)
-    }, 500)
-    return () => {
-      window.clearTimeout(start)
-      window.clearInterval(timer)
-    }
-    // Run once on load only; later trade changes swap the name without animation.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-  const shownName = name.trim() || defaultName.slice(0, typed)
+  const previewMail = mailto(CONTACT_EMAIL, t.contact.subject, t.contact.prompt)
 
-  const tradeLabel = t.mock[trade].label
-  const previewMail = useMemo(() => {
-    const clean = name.trim()
-    return `mailto:${CONTACT_EMAIL}?subject=${encodeURIComponent(t.mail.subject(clean))}&body=${encodeURIComponent(
-      t.mail.body(clean, tradeLabel),
-    )}`
-  }, [name, t, tradeLabel])
-
+  // Page metadata per language
   useEffect(() => {
     document.documentElement.lang = locale
     document.title = t.meta.title
-    document.querySelector('meta[name="description"]')?.setAttribute('content', t.meta.description)
-    document.querySelector('meta[property="og:title"]')?.setAttribute('content', t.meta.title)
-    document.querySelector('meta[property="og:description"]')?.setAttribute('content', t.meta.description)
-    document.querySelector('link[rel="canonical"]')?.setAttribute('href', `${location.origin}/${locale}/`)
+    const set = (selector: string, attr: string, value: string) => document.querySelector(selector)?.setAttribute(attr, value)
+    set('meta[name="description"]', 'content', t.meta.description)
+    set('meta[property="og:title"]', 'content', t.meta.title)
+    set('meta[property="og:description"]', 'content', t.meta.description)
+    set('link[rel="canonical"]', 'href', `${location.origin}/${locale}/`)
+    document
+      .querySelectorAll('link[rel="alternate"]')
+      .forEach((link) =>
+        link.setAttribute('href', `${location.origin}/${link.getAttribute('hreflang') === 'es-PA' ? 'es' : 'en'}/`),
+      )
   }, [locale, t])
 
+  // Theme
   useEffect(() => {
-    document.documentElement.dataset.theme = theme
+    document.documentElement.dataset.theme = dark ? 'dark' : 'light'
     try {
-      localStorage.setItem('ld-theme', theme)
+      localStorage.setItem('gp-theme', dark ? 'dark' : 'light')
     } catch {
-      /* theme just isn't remembered */
+      /* storage blocked: theme just isn't remembered */
     }
-  }, [theme])
+  }, [dark])
 
+  // Reveal-on-scroll; content stays visible if the observer is unavailable
   useEffect(() => {
-    if (shot) dialog.current?.showModal()
-    else {
+    if (matchMedia('(prefers-reduced-motion: reduce)').matches || !('IntersectionObserver' in window)) return
+    const observer = new IntersectionObserver(
+      (entries) =>
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            entry.target.classList.add('seen')
+            observer.unobserve(entry.target)
+          }
+        }),
+      { threshold: 0.08 },
+    )
+    document.querySelectorAll('.reveal').forEach((el) => {
+      el.classList.add('will-reveal')
+      observer.observe(el)
+    })
+    return () => observer.disconnect()
+  }, [])
+
+  // Preview dialog
+  useEffect(() => {
+    if (preview) {
+      dialog.current?.showModal()
+      document.body.style.overflow = 'hidden'
+    } else {
       dialog.current?.close()
+      document.body.style.overflow = ''
       trigger.current?.focus()
     }
-  }, [shot])
+    return () => {
+      document.body.style.overflow = ''
+    }
+  }, [preview])
 
-  const openShot = (event: MouseEvent<HTMLElement>, item: Shot) => {
+  const openPreview = (event: MouseEvent<HTMLElement>, item: Preview) => {
     trigger.current = event.currentTarget
-    setShot(item)
+    setPreview(item)
   }
 
   const nav: Array<[string, string]> = [
-    ['#prices', t.nav.prices],
-    ['#process', t.nav.process],
     ['#work', t.nav.work],
-    ['#faq', t.nav.faq],
+    ['#pricing', t.nav.pricing],
+    ['#process', t.nav.process],
+    ['#about', t.nav.about],
   ]
-  const tradeOptions = (Object.keys(t.mock) as Trade[]).map((key) => ({ value: key, label: t.mock[key].label }))
-  const marketOptions = (['US', 'PA'] as Market[]).map((key) => ({ value: key, label: t.prices.markets[key] }))
+  const plans = t.pricing.plans
 
   return (
     <>
@@ -111,321 +106,324 @@ export default function App() {
         {t.skip}
       </a>
 
-      <header className="site-header">
-        <div className="wrap header-row">
-          <a className="brand" href={`/${locale}/`}>
-            <span className="brand-mark" aria-hidden="true">
-              LD
-            </span>
-            <span className="brand-text">
-              <span className="brand-name">Landing Dollar</span>
-              <span className="brand-line">{t.brandLine}</span>
-            </span>
+      <header className="header wrap">
+        <a href={`/${locale}/`} className="brand" aria-label="Gabriel Peçanha">
+          <span className="brand-symbol" aria-hidden="true">
+            g<span>p</span>
+            <i />
+          </span>
+          <span>
+            gabriel
+            <br />
+            peçanha
+          </span>
+        </a>
+        <nav aria-label="Menu" className={menu ? 'navigation open' : 'navigation'}>
+          {nav.map(([url, label]) => (
+            <a key={url} href={url} onClick={() => setMenu(false)}>
+              {label}
+              <span className="nav-dot" />
+            </a>
+          ))}
+          <a className="nav-cta" href={previewMail} onClick={() => setMenu(false)}>
+            {t.nav.cta} <Arrow />
           </a>
-          <button className="menu-toggle" aria-expanded={menu} aria-controls="site-nav" onClick={() => setMenu(!menu)}>
-            {menu ? t.nav.close : t.nav.menu}
+        </nav>
+        <div className="header-tools">
+          <a className="language" href={es ? '/en/' : '/es/'} hrefLang={es ? 'en' : 'es'}>
+            {es ? 'EN' : 'ES'}
+          </a>
+          <button className="theme-switch" onClick={() => setDark(!dark)} aria-label={t.nav.theme} aria-pressed={dark}>
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="12" cy="12" r="7" fill="none" stroke="currentColor" strokeWidth="1.4" />
+              <path d="M12 5a7 7 0 0 1 0 14Z" fill="currentColor" />
+            </svg>
           </button>
-          <nav id="site-nav" className={menu ? 'site-nav open' : 'site-nav'} aria-label={t.nav.menu}>
-            <ul>
-              {nav.map(([href, label]) => (
-                <li key={href}>
-                  <a href={href} onClick={() => setMenu(false)}>
-                    {label}
-                  </a>
-                </li>
-              ))}
-            </ul>
-            <div className="nav-tools">
-              <a className="lang" href={es ? '/en/' : '/es/'} hrefLang={es ? 'en' : 'es'} lang={es ? 'en' : 'es'}>
-                {es ? 'English' : 'Español'}
-              </a>
-              <button
-                className="theme-toggle"
-                onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-                aria-label={t.nav.theme}
-                aria-pressed={theme === 'dark'}
-              >
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" strokeWidth="2" />
-                  <path d="M12 4a8 8 0 0 1 0 16Z" fill="currentColor" />
-                </svg>
-              </button>
-              <a className="btn btn-primary btn-small" href={previewMail} onClick={() => setMenu(false)}>
-                {t.nav.cta}
-              </a>
-            </div>
-          </nav>
+          <button className="menu-button" aria-expanded={menu} aria-label={t.nav.menu} onClick={() => setMenu(!menu)}>
+            {menu ? '×' : '☰'}
+          </button>
         </div>
       </header>
 
       <main id="main">
-        <section className="hero wrap" aria-labelledby="hero-title">
-          <div className="hero-copy">
-            <h1 id="hero-title" className="display">
-              {t.hero.title}
-            </h1>
-            <p className="lede">{t.hero.body}</p>
-
-            <div className="try">
-              <label className="field-label" htmlFor="business-name">
-                {t.hero.nameLabel}
-              </label>
-              <input
-                id="business-name"
-                className="name-input"
-                type="text"
-                autoComplete="organization"
-                placeholder={defaultName}
-                value={name}
-                maxLength={48}
-                onChange={(e) => setName(e.target.value)}
-              />
-              <Segmented
-                legend={t.hero.tradeLabel}
-                name="trade"
-                options={tradeOptions}
-                value={trade}
-                onChange={(value) => {
-                  setTrade(value)
-                  setTyped(t.mock[value].defaultName.length)
-                }}
-              />
-            </div>
-
+        {/* Hero */}
+        <section className="hero wrap">
+          <div className="hero-top">
+            <a className="intro-portrait" href="#about">
+              <img src="/assets/about/gabriel-supplied-photo.jpg" alt="Gabriel Peçanha" />
+              <span>Gabriel Peçanha</span>
+            </a>
+            <p className="label">
+              <span className="status-dot" />
+              {t.hero.label}
+            </p>
+            <span className="location">{t.hero.location}</span>
+          </div>
+          <h1>
+            <span className="line">
+              <span>{t.hero.line1}</span>
+            </span>
+            <span className="line">
+              <span className="muted-title">{t.hero.line2}</span>
+            </span>
+          </h1>
+          <div className="hero-bottom">
+            <p>{t.hero.body}</p>
             <div className="hero-actions">
-              <a className="btn btn-primary" href={previewMail}>
-                {t.hero.primary}
+              <a className="button primary" href={previewMail}>
+                <span>{t.hero.primary}</span>
+                <Arrow />
               </a>
-              <a className="text-link" href="#prices">
+              <a className="underlink" href="#pricing">
                 {t.hero.secondary}
+                <span aria-hidden="true">↓</span>
               </a>
             </div>
-            <p className="fine">{t.hero.note}</p>
-          </div>
-
-          <figure className="stage">
-            <PhoneMock
-              trade={trade}
-              page={t.mock[trade]}
-              name={shownName}
-              photo={tradeLook[trade].photo}
-              theme={tradeLook[trade].theme}
-              alt={t.hero.mockAlt(name.trim() || defaultName)}
-            />
-            <figcaption>{t.hero.caption}</figcaption>
-          </figure>
-        </section>
-
-        <section className="band prices" id="prices" aria-labelledby="prices-title">
-          <div className="wrap">
-            <div className="section-head">
-              <div>
-                <h2 id="prices-title" className="display">
-                  {t.prices.title}
-                </h2>
-                <p className="section-intro">{t.prices.intro}</p>
-              </div>
-              <Segmented
-                legend={t.prices.marketLabel}
-                name="market-prices"
-                options={marketOptions}
-                value={market}
-                onChange={setMarket}
-              />
-            </div>
-
-            <ol className="board">
-              {t.prices.plans.map((plan) => (
-                <li className="board-row" key={plan.id}>
-                  <div className="row-top">
-                    <h3>{plan.name}</h3>
-                    <span className="leader" aria-hidden="true" />
-                    <p className="price">
-                      {plan.from && <span className="from">{t.prices.fromLabel}</span>}
-                      <span className="amount">{money(plan.amount[market])}</span>
-                      <span className="unit">{plan.unit}</span>
-                    </p>
-                  </div>
-                  <div className="row-body">
-                    <p>{plan.body}</p>
-                    <ul className="details">
-                      {plan.details
-                        .map((d) => (typeof d === 'string' ? d : d[market]))
-                        .map((d) => (
-                          <li key={d}>{d}</li>
-                        ))}
-                    </ul>
-                  </div>
-                </li>
-              ))}
-            </ol>
-
-            <ul className="terms">
-              {t.prices.terms.map((term) => (
-                <li key={term}>{term}</li>
-              ))}
-            </ul>
           </div>
         </section>
 
-        <section className="section wrap" id="process" aria-labelledby="process-title">
-          <h2 id="process-title" className="display">
-            {t.process.title}
-          </h2>
-          <ol className="steps">
-            {t.process.steps.map((step, i) => (
-              <li key={step.title}>
-                <span className="step-n" aria-hidden="true">
-                  {i + 1}
-                </span>
-                <h3>{step.title}</h3>
-                <p>{step.body}</p>
-              </li>
-            ))}
-          </ol>
-        </section>
-
-        <section className="section wrap" id="work" aria-labelledby="work-title">
-          <h2 id="work-title" className="display">
-            {t.work.title}
-          </h2>
-          <p className="section-intro">{t.work.intro}</p>
-
-          <h3 className="sub-title">{t.work.liveTitle}</h3>
-          <div className="live-grid">
-            {projects.map((p, i) => (
-              <article className={i === 0 ? 'live live-main' : 'live'} key={p.name}>
+        {/* Real projects */}
+        <section className="work wrap" id="work" aria-labelledby="work-title">
+          <div className="section-bar reveal">
+            <h2 id="work-title">
+              {t.work.title}
+              <sup>0{projects.length}</sup>
+            </h2>
+            <span className="label">{t.work.label}</span>
+          </div>
+          <div className="work-grid">
+            {projects.map((p, index) => (
+              <article className={`project project-${index} reveal`} key={p.name}>
                 <button
-                  className="shot"
-                  onClick={(e) => openShot(e, { src: p.desktop, title: p.name, url: p.url })}
-                  aria-label={`${t.work.enlarge}: ${p.name}`}
+                  className={`project-art art-${p.accent}`}
+                  onPointerMove={trackPointer}
+                  onClick={(e) => openPreview(e, { src: p.desktop, title: p.name, url: p.url })}
+                  aria-label={`${t.work.open}: ${p.name}`}
                 >
-                  <img src={p.desktop} alt="" loading={i === 0 ? 'eager' : 'lazy'} />
+                  <span className="art-top">
+                    <span>{p.name.toUpperCase()}</span>
+                    <span>0{index + 1} / WEB</span>
+                  </span>
+                  <div className="desktop-frame">
+                    <div className="window-bar">
+                      <span>● ● ●</span>
+                      <span>{new URL(p.url).hostname}</span>
+                      <span>↗</span>
+                    </div>
+                    <img src={p.desktop} alt="" loading={index < 2 ? 'eager' : 'lazy'} />
+                  </div>
+                  {p.mobile && (
+                    <div className="phone-frame">
+                      <img src={p.mobile} alt="" loading="lazy" />
+                    </div>
+                  )}
+                  <span className="view-orb" aria-hidden="true">
+                    {t.work.view}
+                    <Arrow />
+                  </span>
+                  <span className="art-open" aria-hidden="true">
+                    <Arrow />
+                  </span>
                 </button>
-                <div className="live-meta">
+                <div className="project-caption">
                   <div>
-                    <h4>{p.name}</h4>
+                    <h3>{p.name}</h3>
                     <p>{p.category[locale]}</p>
                   </div>
-                  <a className="text-link" href={p.url} target="_blank" rel="noreferrer">
-                    {t.work.visit}
-                    <span className="visually-hidden"> {p.name}</span>
+                  <a href={p.url} target="_blank" rel="noreferrer" aria-label={`${t.work.open}: ${p.name}`}>
+                    <Arrow />
                   </a>
                 </div>
               </article>
             ))}
           </div>
+        </section>
 
-          <div className="concepts-head">
+        {/* Concepts */}
+        <section className="experiments wrap" id="concepts" aria-labelledby="concept-title">
+          <div className="section-bar reveal">
             <div>
-              <h3 className="sub-title">{t.work.conceptsTitle}</h3>
-              <p className="fine">{t.work.conceptsNote}</p>
+              <p className="label">{t.concepts.label}</p>
+              <h2 id="concept-title">{t.concepts.title}</h2>
             </div>
-            <Segmented
-              legend={t.prices.marketLabel}
-              name="market-concepts"
-              options={marketOptions}
-              value={market}
-              onChange={setMarket}
-            />
+            <MarketTabs value={market} onChange={setMarket} label={t.pricing.marketLabel} />
           </div>
-          <ul className="concept-grid">
+          <p className="concept-note">{t.concepts.note}</p>
+          <div className="concept-grid" key={market}>
             {concepts
               .filter((c) => c.market === market)
               .map((c) => (
-                <li key={c.id}>
+                <article key={c.id}>
                   <button
-                    className="shot"
-                    onClick={(e) => openShot(e, { src: c.image, title: c.title[locale] })}
-                    aria-label={`${t.work.enlarge}: ${c.title[locale]}`}
+                    className="concept-image"
+                    onClick={(e) => openPreview(e, { src: c.image, title: c.title[locale] })}
+                    aria-label={`${t.concepts.preview}: ${c.title[locale]}`}
                   >
                     <img src={c.image} alt="" loading="lazy" />
+                    <span>
+                      <Arrow />
+                    </span>
                   </button>
-                  <h4>{c.title[locale]}</h4>
+                  <div className="concept-caption">
+                    <h3>{c.title[locale]}</h3>
+                  </div>
                   <p>{c.segment[locale]}</p>
-                </li>
+                </article>
               ))}
-          </ul>
-        </section>
-
-        <section className="section wrap about" id="about" aria-labelledby="about-title">
-          <img className="portrait" src="/assets/about/gabriel-supplied-photo.jpg" alt="Gabriel Peçanha" loading="lazy" />
-          <div className="about-text">
-            <h2 id="about-title" className="display">
-              {t.about.title}
-            </h2>
-            {t.about.body.map((p) => (
-              <p key={p}>{p}</p>
-            ))}
-            <p className="fine">{t.about.place}</p>
           </div>
         </section>
 
-        <section className="section wrap faq" id="faq" aria-labelledby="faq-title">
-          <h2 id="faq-title" className="display">
-            {t.faq.title}
-          </h2>
-          <div className="faq-list">
+        {/* Pricing */}
+        <section className="pricing wrap" id="pricing" aria-labelledby="pricing-title">
+          <div className="section-bar reveal">
+            <div>
+              <p className="label">{t.pricing.label}</p>
+              <h2 id="pricing-title">{t.pricing.title}</h2>
+              <p className="section-sub">{t.pricing.intro}</p>
+            </div>
+            <MarketTabs value={market} onChange={setMarket} label={t.pricing.marketLabel} />
+          </div>
+          <div className="plan-grid">
+            {plans.map((plan, i) => (
+              <article className={`plan reveal${i === 0 ? ' plan-main' : ''}`} key={plan.id}>
+                <h3>{plan.name}</h3>
+                <p className="plan-price">
+                  {plan.price[market]}
+                  <span>{plan.unit}</span>
+                </p>
+                <p className="plan-body">{plan.body}</p>
+                <ul>
+                  {plan.details
+                    .map((d) => (typeof d === 'string' ? d : d[market]))
+                    .map((d) => (
+                      <li key={d}>{d}</li>
+                    ))}
+                </ul>
+              </article>
+            ))}
+          </div>
+          <ul className="terms reveal">
+            {t.pricing.terms.map((term) => (
+              <li key={term}>{term}</li>
+            ))}
+          </ul>
+        </section>
+
+        {/* Process */}
+        <section className="process wrap" id="process" aria-labelledby="process-title">
+          <div className="section-intro reveal">
+            <p className="label">{t.process.label}</p>
+            <h2 id="process-title">{t.process.title}</h2>
+          </div>
+          <ol className="steps">
+            {t.process.steps.map((s, i) => (
+              <li className="step reveal" key={s.title}>
+                <span className="step-n">0{i + 1}</span>
+                <h3>{s.title}</h3>
+                <p>{s.body}</p>
+              </li>
+            ))}
+          </ol>
+        </section>
+
+        {/* About */}
+        <section className="about wrap" id="about" aria-labelledby="about-title">
+          <div className="about-heading reveal">
+            <p className="label">{t.about.label}</p>
+            <h2 id="about-title">{t.about.title}</h2>
+            <figure className="about-portrait">
+              <img src="/assets/about/gabriel-supplied-photo.jpg" alt="Gabriel Peçanha" loading="lazy" />
+              <figcaption>
+                Gabriel Peçanha <span>{t.about.place}</span>
+              </figcaption>
+            </figure>
+          </div>
+          <div className="about-text reveal">
+            {t.about.body.map((p) => (
+              <p key={p}>{p}</p>
+            ))}
+            <a className="underlink" href="#contact">
+              {t.about.link}
+              <Arrow />
+            </a>
+          </div>
+        </section>
+
+        {/* FAQ */}
+        <section className="services faq wrap" id="faq" aria-labelledby="faq-title">
+          <div className="section-intro reveal">
+            <p className="label">{t.faq.label}</p>
+            <h2 id="faq-title">{t.faq.title}</h2>
+          </div>
+          <div className="service-list">
             {t.faq.items.map((item, i) => (
-              <details key={item.q} open={i === 0}>
-                <summary>{item.q}</summary>
+              <details className="service reveal" key={item.q} open={i === 0}>
+                <summary>
+                  <span className="service-n">0{i + 1}</span>
+                  <h3>{item.q}</h3>
+                  <span className="plus" aria-hidden="true" />
+                </summary>
                 <p>{item.a}</p>
               </details>
             ))}
           </div>
         </section>
-      </main>
 
-      <footer className="closing" id="contact">
-        <div className="wrap">
-          <h2 className="display">{t.contact.title}</h2>
-          <p className="closing-body">{t.contact.body}</p>
-          <div className="closing-actions">
-            <a className="btn btn-primary" href={previewMail}>
-              {t.contact.button}
-            </a>
-            <p>
-              {t.contact.orEmail}{' '}
-              <a className="email" href={`mailto:${CONTACT_EMAIL}`}>
+        {/* Contact */}
+        <section className="contact" id="contact" aria-labelledby="contact-title">
+          <div className="wrap">
+            <div className="contact-top reveal">
+              <p className="label">{t.contact.label}</p>
+              <span className="label">{t.contact.side}</span>
+            </div>
+            <div className="contact-main reveal">
+              <div>
+                <h2 id="contact-title">{t.contact.title}</h2>
+                <p className="contact-body">{t.contact.body}</p>
+              </div>
+              <a className="contact-orb" href={previewMail} aria-label={t.hero.primary}>
+                <Arrow />
+              </a>
+            </div>
+            <div className="contact-bottom">
+              <a className="email" href={previewMail}>
                 {CONTACT_EMAIL}
               </a>
-            </p>
+            </div>
+            <footer>
+              <span>© {new Date().getFullYear()} Gabriel Peçanha</span>
+              <span>{t.contact.footer}</span>
+              <a href="#main">{t.contact.top} ↑</a>
+            </footer>
           </div>
-          <div className="footer-row">
-            <p>
-              © {new Date().getFullYear()} {t.footer.rights}
-            </p>
-            <a href="#main">{t.footer.top}</a>
-          </div>
-        </div>
-      </footer>
+        </section>
+      </main>
 
       <dialog
         ref={dialog}
-        className="shot-dialog"
-        onClose={() => setShot(null)}
+        className="preview"
+        onCancel={() => setPreview(null)}
         onClick={(e) => {
-          if (e.target === e.currentTarget) setShot(null)
+          if (e.target === e.currentTarget) setPreview(null)
         }}
-        aria-label={shot?.title}
+        aria-label={preview?.title}
       >
-        <div className="dialog-head">
-          <strong>{shot?.title}</strong>
-          <button onClick={() => setShot(null)}>{t.dialog.close}</button>
+        <div className="preview-head">
+          <strong>{preview?.title}</strong>
+          <button onClick={() => setPreview(null)}>{t.dialog.close} ×</button>
         </div>
-        {shot && (
+        {preview && (
           <>
-            <div className="dialog-image">
-              <img src={shot.src} alt={shot.title} />
+            <p className="preview-note">{t.dialog.note}</p>
+            <div className="preview-image">
+              <img src={preview.src} alt={preview.title} />
             </div>
-            <p className="fine">
-              {t.dialog.note}{' '}
-              {shot.url && (
-                <a className="text-link" href={shot.url} target="_blank" rel="noreferrer">
-                  {t.dialog.open}
-                </a>
-              )}
-            </p>
+            {preview.url && (
+              <a className="preview-link" href={preview.url} target="_blank" rel="noreferrer">
+                {t.dialog.open}
+                <Arrow />
+              </a>
+            )}
           </>
         )}
       </dialog>
